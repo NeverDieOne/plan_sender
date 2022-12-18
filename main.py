@@ -14,8 +14,8 @@ url = 'https://mentors.dvmn.org/mentor-ui/'
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('notify', action='store_false', help='Оповестить о непроверенных')
-    parser.add_argument('send_plans', action='store_false', help='Разослать планы')
+    parser.add_argument('--notify', action='store_true', help='Оповестить о непроверенных')
+    parser.add_argument('--send_plans', action='store_true', help='Разослать планы')
     return parser.parse_args()
 
 

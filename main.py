@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 from textwrap import dedent
 
@@ -11,9 +12,22 @@ from telethon.sessions import StringSession
 url = 'https://mentors.dvmn.org/mentor-ui/'
 
 
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('notify', action='store_false', help='Оповестить о непроверенных')
+    parser.add_argument('send_plans', action='store_false', help='Разослать планы')
+    return parser.parse_args()
+
+
 async def main():
     env = Env()
     env.read_env()
+
+    args = get_args()
+
+    if not args.notify and not args.send_plans:
+        print('Не указан ни один аргумент!')
+        return
 
     selenium_user = env.str('SELENIUM_USER')
     selenium_password = env.str('SELENIUM_PASSWORD')
@@ -45,6 +59,7 @@ async def main():
         hrefs = [u.get_attribute('href') for u in urls]
 
         messages = {}
+        without_report = []
         for href in hrefs:
             # так работает vue.js, в браузере нужно несколько раз нажать энтер
             driver.get(href)
@@ -55,29 +70,29 @@ async def main():
                 gist_link = driver.find_element(
                     By.XPATH, '//a[contains(text(), "Ссылка на гист")]'
                 )
+            except:
+                # ученик в академе, пропускаем
+                continue
+
+            try:
                 tg_link = driver.find_element(
-                    By.XPATH, '//p[contains(text(), "Tg")]'
+                    By.XPATH, '//span[contains(text(), "Tg")]'
                 )
-                days_left_elem = driver.find_element(
-                    By.XPATH, '//span[contains(text(), "Остаток")]'
+                student_tg = tg_link.text.split('@')[-1]
+                driver.find_element(
+                    By.XPATH, '//span[contains(text(), "обновлено")]'
                 )
             except NoSuchElementException:
-                continue
-            
-            possible_days = ['6 дней', '7 дней']
-            is_new = any([d in days_left_elem.text for d in possible_days])
-            if not is_new:
+                without_report.append(student_tg)
                 continue
             
             gist_href = gist_link.get_attribute('href')
-            student_tg = tg_link.text.split('@')[-1]
-
             messages[student_tg] = gist_href
-    except:
+    except Exception as err:
+        print(err)
         driver.save_screenshot('error.png')
     finally:
         driver.quit()
-
 
     session = StringSession(env.str('SESSION'))
     client = TelegramClient(session, api_id=env.str('TG_API_ID'), api_hash=env.str('TG_API_HASH'))
@@ -85,15 +100,23 @@ async def main():
     await client.start()
 
     try:
-        for tag, plan in messages.items():
-            text = dedent(f"""\
-            [Сообщение создано ботом, твой ментор обленился в край]
+        if args.notify:
+            for student in without_report:
+                text = dedent(f"""\
+                    Привет. Не увидел твоей отписки в плане(
+                    Она нужна мне, чтобы следить за твоим прогрессом и вовремя реагировать на сложности.
+                    Отпишись, плз.
+                    """)
+                await client.send_message(student, text, link_preview=False)
 
-            Привет! Держи планчик на новую неделю:
-            {plan}
-            """)
+        if args.send_plans:
+            for tag, plan in messages.items():
+                text = dedent(f"""\
+                Привет привет. Держи планчик на новую неделю:
+                {plan}
+                """)
 
-            await client.send_message(tag, text)
+                await client.send_message(tag, text, link_preview=False)
     finally:
         await client.disconnect()
 

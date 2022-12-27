@@ -1,7 +1,12 @@
 import argparse
 import asyncio
+import datetime
+import locale
+import re
 from textwrap import dedent
 
+import requests
+from bs4 import BeautifulSoup
 from environs import Env
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException
@@ -17,6 +22,40 @@ def get_args():
     parser.add_argument('--notify', action='store_true', help='Оповестить о непроверенных')
     parser.add_argument('--send_plans', action='store_true', help='Разослать планы')
     return parser.parse_args()
+
+
+def get_study_days(url: str) -> int:
+    study_days = 0
+    response = requests.get(url)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, 'lxml')
+    logtable = soup.select_one('.logtable')
+    blocks = logtable.select('.mt-4 .mb-4')
+
+    today = datetime.date.today()
+
+    locale.setlocale(
+        category=locale.LC_ALL,
+        locale=""
+    )
+
+    study_days = 0
+    for block in blocks:
+        raw = block.select_one('.align-items-center').text
+        pattern = re.compile(r'\s+')
+        day_info = re.sub(pattern, ' ', raw).strip()
+
+        date = ' '.join(day_info.split(' ')[:4])
+        date = datetime.datetime.strptime(date, r'%d %B %Y г.').date()
+
+        if (today - date).days >= 7:
+            break
+
+        is_study = '+' in day_info.split(' ')[-1].strip()
+        if is_study:
+            study_days += 1
+    
+    return study_days
 
 
 async def main():
@@ -79,6 +118,9 @@ async def main():
                     By.XPATH, '//span[contains(text(), "Tg")]'
                 )
                 student_tg = tg_link.text.split('@')[-1]
+                dvmn_link = driver.find_element(
+                    By.XPATH, '//*[contains(@title, "Профиль")]'
+                )
                 driver.find_element(
                     By.XPATH, '//span[contains(text(), "обновлено")]'
                 )
@@ -86,8 +128,10 @@ async def main():
                 without_report.append(student_tg)
                 continue
             
-            gist_href = gist_link.get_attribute('href')
-            messages[student_tg] = gist_href
+            messages[student_tg] = {
+                'gist': gist_link.get_attribute('href'),
+                'dvmn_link': dvmn_link.get_attribute('href')
+            }
     except Exception as err:
         print(err)
         driver.save_screenshot('error.png')
@@ -103,19 +147,29 @@ async def main():
         if args.notify:
             for student in without_report:
                 text = dedent(f"""\
-                    Привет. Не увидел твоей отписки в плане(
-                    Она нужна мне, чтобы следить за твоим прогрессом и вовремя реагировать на сложности.
-                    Отпишись, плз.
+                    Привет. Не увидел отписку в плане( Мне грустно(
                     """)
                 await client.send_message(student, text, link_preview=False)
 
         if args.send_plans:
-            for tag, plan in messages.items():
-                text = dedent(f"""\
-                Привет привет. Держи планчик на новую неделю:
-                {plan}
-                """)
+            for tag, links in messages.items():
+                study_days = get_study_days(f'{links["dvmn_link"]}/history/')
 
+                result = 'Это очень круто! Ты молодец!'
+                if study_days < 4:
+                    result = dedent(f"""\
+                    Маловато(
+                    Подскажи, есть какой-то затык? Могу как-то помочь?
+                    """)
+
+                text = dedent(f"""\
+                Привет привет.
+                Держи планчик на новую неделю:
+                {links['gist']}
+
+                На этой неделе ты учился(ась): {study_days} дня(ей).
+                {result}
+                """)
                 await client.send_message(tag, text, link_preview=False)
     finally:
         await client.disconnect()

@@ -1,4 +1,3 @@
-import argparse
 import asyncio
 import datetime
 import locale
@@ -14,14 +13,7 @@ from selenium.webdriver.common.by import By
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-url = 'https://mentors.dvmn.org/mentor-ui/'
-
-
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--notify', action='store_true', help='Оповестить о непроверенных')
-    parser.add_argument('--send_plans', action='store_true', help='Разослать планы')
-    return parser.parse_args()
+MENTORS_URL = 'https://mentors.dvmn.org/mentor-ui/'
 
 
 def get_study_days(url: str) -> int:
@@ -58,15 +50,50 @@ def get_study_days(url: str) -> int:
     return study_days
 
 
+def parse_user_page(driver: webdriver.Remote, href: str) -> dict[str, str]:
+    # так работает vue.js, в браузере нужно несколько раз нажать энтер
+    driver.get(href)
+    driver.get(href)
+    driver.get(href)
+
+    gist_link = driver.find_element(
+        By.XPATH, '//a[contains(text(), "Ссылка на гист")]'
+    )
+    tg_link = driver.find_element(
+        By.XPATH, '//span[contains(text(), "Tg")]'
+    )
+    student_tg = tg_link.text.split('@')[-1]
+    dvmn_link = driver.find_element(
+        By.XPATH, '//*[contains(@title, "Профиль")]'
+    )
+    comments = driver.find_elements(By.XPATH, "//p[contains(text(), 'Комментарий')]")
+    comment = None
+    if comments:
+        comment = comments[0].text.split('Комментарий: ')[-1]
+    
+    return {
+        student_tg: {
+            'gist': gist_link.get_attribute('href'),
+            'dvmn_link': dvmn_link.get_attribute('href'),
+            'comment': comment
+        }
+    }
+
+
+def login(driver: webdriver.Remote, login: str, password: str) -> None:
+    input_login_field = driver.find_element(By.ID, 'id_username')
+    input_password_field = driver.find_element(By.ID, 'id_password')
+
+    input_login_field.send_keys(login)
+    input_password_field.send_keys(password)
+
+    login_button = driver.find_element(By.CSS_SELECTOR, 'input[type=submit]')
+    login_button.click()
+
+
 async def main():
     env = Env()
     env.read_env()
-
-    args = get_args()
-
-    if not args.notify and not args.send_plans:
-        print('Не указан ни один аргумент!')
-        return
 
     selenium_user = env.str('SELENIUM_USER')
     selenium_password = env.str('SELENIUM_PASSWORD')
@@ -81,57 +108,20 @@ async def main():
     driver.implicitly_wait(5)
 
     try:
-        driver.get(url)
+        driver.get(MENTORS_URL)
+        login(driver, env.str('DVMN_USERNAME'), env.str('DVMN_PASSWORD'))
+        driver.get(MENTORS_URL)
 
-        input_login_field = driver.find_element(By.ID, 'id_username')
-        input_password_field = driver.find_element(By.ID, 'id_password')
-
-        input_login_field.send_keys(env.str('DVMN_USERNAME'))
-        input_password_field.send_keys(env.str('DVMN_PASSWORD'))
-
-        login_button = driver.find_element(By.CSS_SELECTOR, 'input[type=submit]')
-        login_button.click()
-
-        driver.get(url)
-
-        urls = driver.find_elements(By.CSS_SELECTOR, 'div.container a')
-        hrefs = [u.get_attribute('href') for u in urls]
+        student_urls = driver.find_elements(By.CSS_SELECTOR, 'div.container a')
+        hrefs = [u.get_attribute('href') for u in student_urls]
 
         messages = {}
-        without_report = []
-        for href in hrefs:
-            # так работает vue.js, в браузере нужно несколько раз нажать энтер
-            driver.get(href)
-            driver.get(href)
-            driver.get(href)
-
+        for href in hrefs[:4]:
             try:
-                gist_link = driver.find_element(
-                    By.XPATH, '//a[contains(text(), "Ссылка на гист")]'
-                )
-            except:
-                # ученик в академе, пропускаем
-                continue
-
-            try:
-                tg_link = driver.find_element(
-                    By.XPATH, '//span[contains(text(), "Tg")]'
-                )
-                student_tg = tg_link.text.split('@')[-1]
-                dvmn_link = driver.find_element(
-                    By.XPATH, '//*[contains(@title, "Профиль")]'
-                )
-                driver.find_element(
-                    By.XPATH, '//span[contains(text(), "обновлено")]'
-                )
+                messages.update(parse_user_page(driver, href))
             except NoSuchElementException:
-                without_report.append(student_tg)
+                # Ученик в академе - пропускаем
                 continue
-            
-            messages[student_tg] = {
-                'gist': gist_link.get_attribute('href'),
-                'dvmn_link': dvmn_link.get_attribute('href')
-            }
     except Exception as err:
         print(err)
         driver.save_screenshot('error.png')
@@ -144,33 +134,26 @@ async def main():
     await client.start()
 
     try:
-        if args.notify:
-            for student in without_report:
-                text = dedent(f"""\
-                    Привет. Не увидел отписку в плане( Мне грустно(
-                    """)
-                await client.send_message(student, text, link_preview=False)
+        for tag, info in messages.items():
+            study_days = get_study_days(f'{info["dvmn_link"]}/history/')
 
-        if args.send_plans:
-            for tag, links in messages.items():
-                study_days = get_study_days(f'{links["dvmn_link"]}/history/')
+            text = dedent(f"""\
+            Привет привет :3
+            Держи планчик на новую неделю:
+            {info['gist']}
 
-                result = 'Это очень круто! Ты молодец!'
-                if study_days < 4:
-                    result = dedent(f"""\
-                    Маловато(
-                    Подскажи, есть какой-то затык? Могу как-то помочь?
-                    """)
+            Статистика:
+            На этой неделе ты учился(ась): {study_days} дня(ей), в этот раз хорошо это или нет решай сам(а) :D.
+            """)
 
-                text = dedent(f"""\
-                Привет привет.
-                Держи планчик на новую неделю:
-                {links['gist']}
-
-                На этой неделе ты учился(ась): {study_days} дня(ей).
-                {result}
+            if comment := info['comment']:
+                text += dedent(f"""\
+                {'-' * 5}
+                
+                {comment}
                 """)
-                await client.send_message(tag, text, link_preview=False)
+            
+            await client.send_message(tag, text, link_preview=False)
     finally:
         await client.disconnect()
 

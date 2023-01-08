@@ -116,7 +116,7 @@ async def main():
         hrefs = [u.get_attribute('href') for u in student_urls]
 
         messages = {}
-        for href in hrefs[:4]:
+        for href in hrefs:
             try:
                 messages.update(parse_user_page(driver, href))
             except NoSuchElementException:

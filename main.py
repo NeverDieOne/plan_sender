@@ -66,18 +66,24 @@ def parse_user_page(driver: webdriver.Remote, href: str) -> dict[str, str]:
     dvmn_link = driver.find_element(
         By.XPATH, '//*[contains(@title, "Профиль")]'
     )
-    comments = driver.find_elements(By.XPATH, "//p[contains(text(), 'Комментарий')]")
-    comment = None
-    if comments:
-        comment = comments[0].text.split('Комментарий: ')[-1]
-    
-    return {
+
+    data = {
         student_tg: {
             'gist': gist_link.get_attribute('href'),
             'dvmn_link': dvmn_link.get_attribute('href'),
-            'comment': comment
         }
     }
+
+    comments = driver.find_elements(By.XPATH, "//p[contains(text(), 'Комментарий')]")
+    comment = None
+    if comments:
+        comment = comments[0]
+        if comment.is_displayed():
+            comment_text = comment.text.split('Комментарий: ')[-1]
+            close_button = comment.find_element(By.XPATH, './/parent::*/button/i')
+            data[student_tg].update({'comment': comment_text})
+            close_button.click()
+    return data
 
 
 def login(driver: webdriver.Remote, login: str, password: str) -> None:
@@ -128,34 +134,34 @@ async def main():
     finally:
         driver.quit()
 
-    session = StringSession(env.str('SESSION'))
-    client = TelegramClient(session, api_id=env.str('TG_API_ID'), api_hash=env.str('TG_API_HASH'))
+    # session = StringSession(env.str('SESSION'))
+    # client = TelegramClient(session, api_id=env.str('TG_API_ID'), api_hash=env.str('TG_API_HASH'))
 
-    await client.start()
+    # await client.start()
 
-    try:
-        for tag, info in messages.items():
-            study_days = get_study_days(f'{info["dvmn_link"]}/history/')
+    # try:
+    #     for tag, info in messages.items():
+    #         study_days = get_study_days(f'{info["dvmn_link"]}/history/')
 
-            text = dedent(f"""\
-            Привет привет :3
-            Держи планчик на новую неделю:
-            {info['gist']}
+    #         text = dedent(f"""\
+    #         Привет привет :3
+    #         Держи планчик на новую неделю:
+    #         {info['gist']}
 
-            Статистика:
-            На этой неделе ты учился(ась): {study_days} дня(ей), в этот раз хорошо это или нет решай сам(а) :D.
-            """)
+    #         Статистика:
+    #         На этой неделе ты учился(ась): {study_days} дня(ей), в этот раз хорошо это или нет решай сам(а) :D.
+    #         """)
 
-            if comment := info['comment']:
-                text += dedent(f"""\
-                {'-' * 5}
+    #         if comment := info['comment']:
+    #             text += dedent(f"""\
+    #             {'-' * 5}
                 
-                {comment}
-                """)
+    #             {comment}
+    #             """)
             
-            await client.send_message(tag, text, link_preview=False)
-    finally:
-        await client.disconnect()
+    #         await client.send_message(tag, text, link_preview=False)
+    # finally:
+    #     await client.disconnect()
 
 if __name__ == '__main__':
     asyncio.run(main())
